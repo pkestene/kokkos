@@ -475,7 +475,8 @@ void CudaInternal::initialize( int cuda_device_id , int stream_count )
     if ( stream_count ) {
       m_stream = (cudaStream_t*) ::malloc( stream_count * sizeof(cudaStream_t) );
       m_streamCount = stream_count ;
-      for ( size_type i = 0 ; i < m_streamCount ; ++i ) m_stream[i] = 0 ;
+      for ( size_type i = 0 ; i < m_streamCount ; ++i )
+	cudaStreamCreate( &(m_stream[i]) );
     }
   }
   else {

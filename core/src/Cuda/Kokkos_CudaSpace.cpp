@@ -77,7 +77,8 @@ namespace {
    cudaStream_t get_deep_copy_stream() {
      static cudaStream_t s = 0;
      if( s == 0) {
-       cudaStreamCreate ( &s );
+       //cudaStreamCreate ( &s );
+       cudaStreamCreateWithFlags(&s, cudaStreamNonBlocking);
      }
      return s;
    }
@@ -103,8 +104,9 @@ DeepCopy<CudaSpace,HostSpace,Cuda>::DeepCopy( const Cuda & instance , void * dst
 
 void DeepCopyAsyncCuda( void * dst , const void * src , size_t n) {
   cudaStream_t s = get_deep_copy_stream();
-  CUDA_SAFE_CALL( cudaMemcpyAsync( dst , src , n , cudaMemcpyDefault , s ) );
-  cudaStreamSynchronize(s);
+  //CUDA_SAFE_CALL( cudaMemcpyAsync( dst , src , n , cudaMemcpyDefault , s ) );
+  CUDA_SAFE_CALL( cudaMemcpyAsync( dst , src , n , cudaMemcpyDefault , cudaStreamPerThread ) );
+  //cudaStreamSynchronize(s);
 }
 
 } // namespace Impl
