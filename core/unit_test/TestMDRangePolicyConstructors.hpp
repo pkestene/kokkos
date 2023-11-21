@@ -95,4 +95,13 @@ TEST(TEST_CATEGORY_DEATH, policy_bounds_unsafe_narrowing_conversions) {
 }
 #endif
 
+TEST(TEST_CATEGORY_DEATH, policy_wrong_bounds_value) {
+  // using Policy = Kokkos::MDRangePolicy<TEST_EXECSPACE, Kokkos::Rank<2>,
+  //                                    Kokkos::IndexType<unsigned>>;
+  using Policy = Kokkos::MDRangePolicy<TEST_EXECSPACE, Kokkos::Rank<2>>;
+
+  //::testing::FLAGS_gtest_death_test_style = "threadsafe";
+  EXPECT_DEATH({ (void)Policy({10, 10}, {5, 15}); }, ".*");
+}
+
 }  // namespace
