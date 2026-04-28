@@ -42,10 +42,11 @@ namespace Kokkos {
 
 namespace Impl {
 enum class CudaLaunchMechanism : unsigned {
-  Default        = 0,
-  ConstantMemory = 1,
-  GlobalMemory   = 2,
-  LocalMemory    = 4
+  Default                   = 0,
+  ConstantMemory            = 1,
+  GlobalMemory              = 2,
+  LocalMemory               = 4,
+  LocalMemoryNoGridConstant = 8
 };
 
 constexpr inline CudaLaunchMechanism operator|(CudaLaunchMechanism p1,

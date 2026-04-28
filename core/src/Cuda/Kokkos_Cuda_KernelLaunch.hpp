@@ -106,6 +106,19 @@ __global__ __launch_bounds__(
                                                                      driver) {
   driver();
 }
+
+template <class DriverType>
+__global__ static void cuda_parallel_launch_local_memory_no_grid_constant(
+    const DriverType driver) {
+  driver();
+}
+
+template <class DriverType, unsigned int maxTperB, unsigned int minBperSM>
+__global__
+__launch_bounds__(maxTperB, minBperSM) static void cuda_parallel_launch_local_memory_no_grid_constant(
+    const DriverType driver) {
+  driver();
+}
 #endif  // KOKKOS_IMPL_CUDA_USE_GRID_CONSTANT
 
 template <class DriverType>
@@ -260,7 +273,10 @@ struct DeduceCudaLaunchMechanism {
       Kokkos::Experimental::WorkItemProperty::HintLightWeight;
   constexpr static auto heavy_weight =
       Kokkos::Experimental::WorkItemProperty::HintHeavyWeight;
-  constexpr static typename DriverType::Policy::work_item_property property{};
+  constexpr static auto no_grid_constant = Kokkos::Experimental::
+      WorkItemProperty::ImplForceLocalLaunchNoGridConstant;
+  constexpr static typename DriverType::Policy::work_item_property property =
+      typename DriverType::Policy::work_item_property();
 
   static constexpr CudaLaunchMechanism valid_launch_mechanism =
       // BuildValidMask
@@ -271,6 +287,8 @@ struct DeduceCudaLaunchMechanism {
       (sizeof(DriverType) < CudaTraits::ConstantMemoryUsage
            ? CudaLaunchMechanism::ConstantMemory
            : CudaLaunchMechanism::Default) |
+#else
+      CudaLaunchMechanism::LocalMemoryNoGridConstant |
 #endif
       CudaLaunchMechanism::GlobalMemory;
 
@@ -300,7 +318,9 @@ struct DeduceCudaLaunchMechanism {
 
   static constexpr CudaLaunchMechanism launch_mechanism =
 #ifdef KOKKOS_IMPL_CUDA_USE_GRID_CONSTANT
-      default_launch_mechanism;
+      ((property & no_grid_constant) == no_grid_constant)
+          ? CudaLaunchMechanism::LocalMemoryNoGridConstant
+          : default_launch_mechanism;
 #else
       // Logic mask for choosing launch mechanism by functor size (F) and
       // Kernel Property. First column is restriction by size (local L,
@@ -377,7 +397,7 @@ struct CudaParallelLaunchKernelInvoker<DriverType, LaunchBounds,
                                               CudaLaunchMechanism::LocalMemory>;
   static_assert(sizeof(DriverType) < CudaTraits::KernelArgumentLimit,
                 "Kokkos Error: Requested CudaLaunchLocalMemory with a Functor "
-                "larger than 4096 bytes.");
+                "larger than 32768 bytes.");
 
   static void invoke_kernel(DriverType const& driver, dim3 const& grid,
                             dim3 const& block, int shmem,
@@ -441,6 +461,113 @@ struct CudaParallelLaunchKernelInvoker<DriverType, LaunchBounds,
 };
 
 // </editor-fold> end local memory }}}2
+//------------------------------------------------------------------------------
+
+//------------------------------------------------------------------------------
+// <editor-fold desc="Local memory no grid constant"> {{{2
+
+template <class DriverType, unsigned int MaxThreadsPerBlock,
+          unsigned int MinBlocksPerSM>
+struct CudaParallelLaunchKernelFunc<
+    DriverType, Kokkos::LaunchBounds<MaxThreadsPerBlock, MinBlocksPerSM>,
+    CudaLaunchMechanism::LocalMemoryNoGridConstant> {
+  static std::decay_t<
+      decltype(cuda_parallel_launch_local_memory_no_grid_constant<
+               DriverType, MaxThreadsPerBlock, MinBlocksPerSM>)>
+  get_kernel_func() {
+    return cuda_parallel_launch_local_memory_no_grid_constant<
+        DriverType, MaxThreadsPerBlock, MinBlocksPerSM>;
+  }
+};
+
+template <class DriverType>
+struct CudaParallelLaunchKernelFunc<
+    DriverType, Kokkos::LaunchBounds<0, 0>,
+    CudaLaunchMechanism::LocalMemoryNoGridConstant> {
+  static std::decay_t<
+      decltype(cuda_parallel_launch_local_memory_no_grid_constant<DriverType>)>
+  get_kernel_func() {
+    return cuda_parallel_launch_local_memory_no_grid_constant<DriverType>;
+  }
+};
+
+//------------------------------------------------------------------------------
+
+template <class DriverType, class LaunchBounds>
+struct CudaParallelLaunchKernelInvoker<
+    DriverType, LaunchBounds, CudaLaunchMechanism::LocalMemoryNoGridConstant>
+    : CudaParallelLaunchKernelFunc<
+          DriverType, LaunchBounds,
+          CudaLaunchMechanism::LocalMemoryNoGridConstant> {
+  using base_t = CudaParallelLaunchKernelFunc<
+      DriverType, LaunchBounds, CudaLaunchMechanism::LocalMemoryNoGridConstant>;
+  static_assert(sizeof(DriverType) < CudaTraits::KernelArgumentLimit,
+                "Kokkos Error: Requested CudaLaunchLocalMemoryNoGridConstant "
+                "with a Functor "
+                "larger than 4096 bytes.");
+
+  static void invoke_kernel(DriverType const& driver, dim3 const& grid,
+                            dim3 const& block, int shmem,
+                            CudaInternal const* cuda_instance) {
+    // Set cuda device before launching kernel
+    cuda_instance->set_cuda_device();
+
+    (base_t::
+         get_kernel_func())<<<grid, block, shmem, cuda_instance->m_stream>>>(
+        driver);
+  }
+
+  inline static void create_parallel_launch_graph_node(
+      DriverType const& driver, dim3 const& grid, dim3 const& block, int shmem,
+      CudaInternal const* cuda_instance) {
+    //----------------------------------------
+    auto const& graph = Impl::get_cuda_graph_from_kernel(driver);
+    KOKKOS_EXPECTS(bool(graph));
+    auto& graph_node = Impl::get_cuda_graph_node_from_kernel(driver);
+    // Expect node not yet initialized
+    KOKKOS_EXPECTS(!bool(graph_node));
+
+    if (!Impl::is_empty_launch(grid, block)) {
+      Impl::check_shmem_request(cuda_instance, shmem);
+      if constexpr (DriverType::Policy::
+                        experimental_contains_desired_occupancy) {
+        int desired_occupancy =
+            driver.get_policy().impl_get_desired_occupancy().value();
+        size_t block_size = static_cast<size_t>(block.x) * block.y * block.z;
+        Impl::configure_shmem_preference<DriverType, LaunchBounds>(
+            cuda_instance->m_cudaDev, base_t::get_kernel_func(),
+            cuda_instance->m_deviceProp, block_size, shmem, desired_occupancy);
+      }
+
+      void const* args[] = {&driver};
+
+      cudaKernelNodeParams params = {};
+
+      params.blockDim       = block;
+      params.gridDim        = grid;
+      params.sharedMemBytes = shmem;
+      // Casting a function pointer to a data pointer...
+      params.func         = reinterpret_cast<void*>(base_t::get_kernel_func());
+      params.kernelParams = const_cast<void**>(args);
+      params.extra        = nullptr;
+
+      KOKKOS_IMPL_CUDA_SAFE_CALL(
+          (cuda_instance->cuda_graph_add_kernel_node_wrapper(
+              &graph_node, graph, /* dependencies = */ nullptr,
+              /* numDependencies = */ 0, &params)));
+    } else {
+      // We still need an empty node for the dependency structure
+      KOKKOS_IMPL_CUDA_SAFE_CALL(
+          (cuda_instance->cuda_graph_add_empty_node_wrapper(
+              &graph_node, graph,
+              /* dependencies = */ nullptr,
+              /* numDependencies = */ 0)));
+    }
+    KOKKOS_ENSURES(bool(graph_node))
+  }
+};
+
+// </editor-fold> end local memory no grid constant}}}2
 //------------------------------------------------------------------------------
 
 //------------------------------------------------------------------------------
