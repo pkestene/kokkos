@@ -62,12 +62,15 @@ struct WorkItemProperty {
       ImplWorkItemProperty<8>();
   constexpr static const ImplWorkItemProperty<16> ImplForceGlobalLaunch =
       ImplWorkItemProperty<16>();
+  constexpr static const ImplWorkItemProperty<32> ImplForceConstantLaunch =
+      ImplWorkItemProperty<32>();
   using None_t                  = ImplWorkItemProperty<0>;
   using HintLightWeight_t       = ImplWorkItemProperty<1>;
   using HintHeavyWeight_t       = ImplWorkItemProperty<2>;
   using HintRegular_t           = ImplWorkItemProperty<4>;
   using HintIrregular_t         = ImplWorkItemProperty<8>;
   using ImplForceGlobalLaunch_t = ImplWorkItemProperty<16>;
+  using ImplForceConstantLaunch_t = ImplWorkItemProperty<32>;
 };
 
 template <unsigned long pv1, unsigned long pv2>
